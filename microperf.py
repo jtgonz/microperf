@@ -1,8 +1,10 @@
+import argparse
 import numpy as np
 from dxfwrite import DXFEngine as dxf 
 
-def microperf(diameter, spacing, angle=0, border_width=8.5, border_height=8.37,
-  tab_radius=1, grid_width=4.25, grid_height=3.25, offset_x=0, offset_y=0):
+def microperf(diameter, spacing, angle=0, border_width=None, border_height=None,
+  tab_radius=0, grid_width=4.25, grid_height=3.25, offset_x=0, offset_y=0,
+  suffix='', border=False, label=False):
 
   # translate row/column to x and y coordinates
   def x(i, j):
@@ -21,6 +23,10 @@ def microperf(diameter, spacing, angle=0, border_width=8.5, border_height=8.37,
     dx = dy = spacing * 1e-3
     xoff = 0
 
+  # if border is not specified, just outline the grid
+  border_width = border_width or (grid_width + 2 * hole_radius)
+  border_height = border_height or (grid_height + 2 * hole_radius)
+
   # calculate number of holes
   nx = int(grid_width/dx + 1)
   ny = int(grid_height/dy + 1)
@@ -30,26 +36,32 @@ def microperf(diameter, spacing, angle=0, border_width=8.5, border_height=8.37,
     dxf.circle(hole_radius, (x(i, j), y(j)), layer='holes') \
     for i in xrange(nx-1 if j%2 and angle else nx)] for j in xrange(ny) ]
 
-  # draw the outline
+  # get boundaries
   left, right, top, bot = \
     -1 * border_width/2 + offset_x, border_width/2 + offset_x, \
     border_height/2 + offset_y, -1 * border_height/2 + offset_y
 
+  # draw the outline
   borders = []
-  borders.append( dxf.line((left, bot), (left, top), layer='border') )    # left
-  borders.append( dxf.line((right, bot), (right, top), layer='border') )  # right
-  borders.append( dxf.line((left, bot), (right, bot), layer='border') )   # bottom
+  if border:
+    borders.append(dxf.line((left, bot), (left, top), layer='border'))   # left
+    borders.append(dxf.line((right, bot), (right, top), layer='border')) # right
+    borders.append(dxf.line((left, bot), (right, bot), layer='border'))  # bottom
 
-  # top and tab
-  borders.append( dxf.line((left, top), (-1*tab_radius+offset_x, top),
-    layer='border') )
-  borders.append( dxf.line((tab_radius+offset_x, top), (right, top),
-    layer='border') )
-  borders.append( dxf.arc(tab_radius, (offset_x, top), 0, 180, layer='border') )
+    # top and tab
+    if tab_radius:
+      borders.append(dxf.line((left, top), (-1*tab_radius+offset_x, top),
+        layer='border') )
+      borders.append(dxf.line((tab_radius+offset_x, top), (right, top),
+        layer='border') )
+      borders.append(dxf.arc(tab_radius, (offset_x, top), 0, 180, layer='border'))
+    else:
+        borders.append(dxf.line((left, top), (right, top), layer='border') )
 
   # draw text
-  text = dxf.text(str(diameter)+'-'+str(spacing)+' A',
-    (left+0.5, bot+0.5), layer='text', height=1.0)
+  text = []
+  if label: text.append(dxf.text(str(diameter)+'-'+str(spacing)+' '+suffix,
+    (left+0.5, bot+0.5), layer='text', height=1.0))
 
   return borders, holes, text
 
@@ -69,33 +81,37 @@ def microperf_style(**kwargs):
 def concat_dict(a, b):
   d = a.copy(); d.update(b); return d
 
-# create drawing
-drawing = dxf.drawing('out.dxf')
+if __name__ == '__main__':
+  parser = argparse.ArgumentParser()
 
-# 60-degree hex grid
-hexperf = microperf_style(angle=60)
-# 60-degree hex grid with much fewer points, so we can open it in AI and inspect
-hexperf_tiny = microperf_style(angle=60, grid_width=.25, grid_height=.25)
+  # these arguments are required
+  parser.add_argument('diameter', type=float, help='hole diameter')
+  parser.add_argument('spacing', type=float, help='hole spacing')
 
-# generate microperf grids and add to drawing
-add_to_drawing([
-  hexperf_tiny(5, 25, offset_x=20, offset_y=80),
-  hexperf_tiny(5, 20, offset_x=20, offset_y=60),
-  hexperf_tiny(5, 15, offset_x=20, offset_y=40),
-  hexperf_tiny(5, 10, offset_x=20, offset_y=20),
+  # these are optional
+  parser.add_argument('-a', metavar='angle', type=float,
+    help='angle between holes (ex. 60 for hexagonal grid)', default=0.0)
+  parser.add_argument('-gw', metavar='grid width', type=float,
+    help='horizontal distance that holes should span', default=1.0)
+  parser.add_argument('-gh', metavar='grid height', type=float,
+    help='vertical distance that holes should span', default=1.0)
+  parser.add_argument('-bw', metavar='border width', type=float,
+    help='rectangular border around grid (width)', default=None)
+  parser.add_argument('-bh', metavar='border height', type=float,
+    help='rectangular border around grid (height)', default=None)
+  parser.add_argument('-o', metavar='destination', type=str,
+    help='name of output file', default='out.dxf')
 
-  hexperf_tiny(10, 25, offset_x=40, offset_y=80),
-  hexperf_tiny(10, 20, offset_x=40, offset_y=60),
-  hexperf_tiny(10, 15, offset_x=40, offset_y=40),
+  args = parser.parse_args()
 
-  hexperf_tiny(15, 25, offset_x=60, offset_y=80),
-  hexperf_tiny(15, 20, offset_x=60, offset_y=60),
+  # if no border params were passed, border is False. If just one was passed,
+  # border is a square -- set width equal to height or vice versa
+  border = True if args.bw or args.bh else False
+  args.bw = args.bw or args.bh
+  args.bh = args.bh or args.bw
 
-  hexperf_tiny(20, 25, offset_x=80, offset_y=80)
-], drawing)
-
-# add 10mmx10mm square for reference
-drawing.add(dxf.rectangle((75, 20), 10, 10, layer='ref'))
-drawing.add(dxf.text('10mmx10mm', (75, 18), height=1, layer='text'))
-
-drawing.save()
+  drawing = drawing = dxf.drawing(args.o)
+  add_to_drawing( microperf(args.diameter, args.spacing, angle=args.a,
+    border_width=args.bw, border_height=args.bh, grid_width=args.gw,
+    grid_height=args.gh, border=border), drawing )
+  drawing.save()
